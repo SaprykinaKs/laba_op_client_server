@@ -7,8 +7,8 @@
 #include <unistd.h>           // close, write
 #include <atomic>             // флаг для синхронизации между потоками
 
-void sendMessages(int serverSocket, std::atomic<bool>& allowed);
-void incomingMessages(int serverSocket, std::atomic<bool>& allowed);
+void sendMessages(int serverSocket, std::atomic<bool>& allowed, std::atomic<bool>& running);
+void incomingMessages(int serverSocket, std::atomic<bool>& allowed, std::atomic<bool>& running);
 
 int main() {
     int clientSocket = socket(AF_INET, SOCK_STREAM, 0);
@@ -19,7 +19,7 @@ int main() {
 
     sockaddr_in serverAddr;
     serverAddr.sin_family = AF_INET;
-    serverAddr.sin_port = htons(8080);
+    serverAddr.sin_port = htons(80);
     inet_pton(AF_INET, "127.0.0.1", &serverAddr.sin_addr);
 
     if (connect(clientSocket, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
@@ -29,13 +29,14 @@ int main() {
 
     std::cout << "Connected to server" << std::endl;
 
-    std::atomic<bool> allowed(true);  // флаг
+    std::atomic<bool> allowed(true);  // флаг отправки
+    std::atomic<bool> running(true); // флаг работы 
 
     std::thread sender([&]() {
-        sendMessages(clientSocket, allowed);
+        sendMessages(clientSocket, allowed, running);
     });
     std::thread receiver([&]() {
-        incomingMessages(clientSocket, allowed);
+        incomingMessages(clientSocket, allowed, running);
     });
 
     sender.join();
@@ -45,8 +46,8 @@ int main() {
     return 0;
 }
 
-void sendMessages(int serverSocket, std::atomic<bool>& allowed) {
-    while (true) {
+void sendMessages(int serverSocket, std::atomic<bool>& allowed, std::atomic<bool>& running) {
+    while (running.load()) {
         if (allowed.load()) {
             // const char *message = "pping";  // проверка на неправильное
             const char *message = "ping";
@@ -54,19 +55,20 @@ void sendMessages(int serverSocket, std::atomic<bool>& allowed) {
             ssize_t bytesSent = send(serverSocket, message, strlen(message), 0);
             if (bytesSent == -1) {
                 std::cerr << "Error sending message: " << strerror(errno) << std::endl;
+                running.store(false); // завершаем работу
                 break; 
             }
 
-            std::cout << "Sent: " << message << std::endl;
+            // std::cout << "Sent: " << message << std::endl; // проверочка
             allowed.store(false);  // блокируем отправку
             sleep(1); 
         }
     }
 }
 
-void incomingMessages(int serverSocket, std::atomic<bool>& allowed) {
+void incomingMessages(int serverSocket, std::atomic<bool>& allowed, std::atomic<bool>& running) {
     char buffer[1024]; 
-    while (true) {
+    while (running.load()) {
         memset(buffer, 0, sizeof(buffer));  
         int bytesRead = read(serverSocket, buffer, 1024);  
         if (bytesRead <= 0) {
@@ -75,6 +77,7 @@ void incomingMessages(int serverSocket, std::atomic<bool>& allowed) {
             } else {
                 std::cerr << "Error receiving message: " << strerror(errno) << std::endl;
             }
+            running.store(false); // завершаем работу
             break;
         }
 
